@@ -175,17 +175,23 @@ export const exportToExcel = async (data: ProcessedRow[], fileName: string) => {
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet('匹配结果');
 
-  // 尺寸计算 (96 DPI):
-  // 1磅 (Point) = 1/72 英寸
-  // 2.5cm = (2.5 / 2.54) * 96 ≈ 95 像素
-  // Excel 行高 (磅): 2.5cm ≈ 71 磅
-  // 用户要求列宽调整为 34 单位 (约 6.6cm / 251 像素)
+  // 尺寸与居中计算 (96 DPI):
+  // 1 磅 (Point) = 1/72 英寸
+  // 2.15cm = 81 像素 (图片高度)
+  // 2.15cm = 61 磅 (Excel 行高)
+  // 6.0cm = 227 像素 (图片宽度)
+  // 列宽 34 约为 251 像素
+  
+  // 水平偏移计算: (单元格宽 251px - 图片宽 227px) / 2 = 12px
+  // 1 像素 = 9525 EMU (English Metric Units)
+  const horizOffsetEMU = 12 * 9525; 
+  // 垂直偏移计算: 行高 61pt 刚好对应 81px 图片高度，偏移设为 0 或微调
+  const vertOffsetEMU = 0;
 
   const columns = ['输入 OE', 'XX 编码', '适用车型', '年份', 'OEM', '驱动', '图片', '广州价'];
   worksheet.columns = columns.map(c => ({ 
     header: c, 
     key: c, 
-    // 将“图片”列宽从 37 调整为 34
     width: c === 'OEM' || c === '适用车型' ? 35 : (c === '图片' ? 34 : 15)
   }));
 
@@ -203,8 +209,8 @@ export const exportToExcel = async (data: ProcessedRow[], fileName: string) => {
     const excelRow = worksheet.addRow({});
     const rowNumber = i + 2;
     
-    // 将行高设为 71 磅（约 2.5cm）
-    excelRow.height = 71;
+    // 设置行高为 61 磅 (2.15cm)
+    excelRow.height = 61;
     excelRow.alignment = { vertical: 'middle', horizontal: 'center' };
 
     columns.forEach((col, colIdx) => {
@@ -218,32 +224,45 @@ export const exportToExcel = async (data: ProcessedRow[], fileName: string) => {
             buffer: imgData.buffer,
             extension: imgData.extension as any,
           });
-          // 调整图片 ext 以适配单元格: 251px (对应 34 列宽) x 95px (对应 71 行高/2.5cm)
+          
+          // 设置图片居中插入
           worksheet.addImage(imageId, {
-            tl: { col: colIdx, row: rowNumber - 1 },
-            ext: { width: 251, height: 95 },
+            tl: { 
+              col: colIdx, 
+              row: rowNumber - 1,
+              nativeColOff: horizOffsetEMU,
+              nativeRowOff: vertOffsetEMU
+            },
+            ext: { width: 227, height: 81 },
             editAs: 'oneCell'
           });
         } catch (e) { console.error(e); }
         cell.value = "";
-      } else if (col === 'OEM' && val && rowData['输入 OE']) {
-        const oemStr = String(val);
-        const inputNorm = normalize(rowData['输入 OE']);
-        const parts = oemStr.split(/([\s\n,;:/|，；、]+)/);
-        const richText: any[] = [];
-        parts.forEach(part => {
-           if (!part) return;
-           if (/^[\s\n,;:/|，；、]+$/.test(part)) {
-             richText.push({ text: part });
-           } else {
-             if (normalize(part) === inputNorm) {
-               richText.push({ text: part, font: { color: { argb: 'FFFF0000' }, bold: true } });
-             } else {
+      } else if (col === 'OEM') {
+        // 设置 OEM 列自动换行
+        cell.alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' };
+        
+        if (val && rowData['输入 OE']) {
+          const oemStr = String(val);
+          const inputNorm = normalize(rowData['输入 OE']);
+          const parts = oemStr.split(/([\s\n,;:/|，；、]+)/);
+          const richText: any[] = [];
+          parts.forEach(part => {
+             if (!part) return;
+             if (/^[\s\n,;:/|，；、]+$/.test(part)) {
                richText.push({ text: part });
+             } else {
+               if (normalize(part) === inputNorm) {
+                 richText.push({ text: part, font: { color: { argb: 'FFFF0000' }, bold: true } });
+               } else {
+                 richText.push({ text: part });
+               }
              }
-           }
-        });
-        cell.value = { richText };
+          });
+          cell.value = { richText };
+        } else {
+          cell.value = val;
+        }
       } else {
         cell.value = val;
       }

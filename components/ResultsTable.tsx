@@ -19,14 +19,14 @@ const ImagePreview: React.FC<{ data?: { buffer: ArrayBuffer; extension: string }
     }
   }, [data]);
 
-  if (!url) return <div className="flex items-center justify-center w-24 h-10 bg-slate-100 rounded text-slate-400"><ImageIcon size={16} /></div>;
+  if (!url) return <div className="flex items-center justify-center w-24 h-9 bg-slate-100 rounded text-slate-400"><ImageIcon size={16} /></div>;
 
   return (
     <img 
       src={url} 
       alt="Preview" 
-      className="w-24 h-10 object-cover rounded border border-slate-200 shadow-sm" 
-      style={{ aspectRatio: '60 / 25' }}
+      className="w-24 h-9 object-cover rounded border border-slate-200 shadow-sm" 
+      style={{ aspectRatio: '60 / 21.5' }}
     />
   );
 };
