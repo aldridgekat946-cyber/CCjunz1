@@ -179,14 +179,14 @@ export const exportToExcel = async (data: ProcessedRow[], fileName: string) => {
   // 1磅 (Point) = 1/72 英寸
   // 2.5cm = (2.5 / 2.54) * 96 ≈ 95 像素
   // Excel 行高 (磅): 2.5cm ≈ 71 磅
-  // 用户要求列宽调整为 37 单位 (约 7.2cm / 275 像素)
+  // 用户要求列宽调整为 34 单位 (约 6.6cm / 251 像素)
 
   const columns = ['输入 OE', 'XX 编码', '适用车型', '年份', 'OEM', '驱动', '图片', '广州价'];
   worksheet.columns = columns.map(c => ({ 
     header: c, 
     key: c, 
-    // 将“图片”列宽设为 37
-    width: c === 'OEM' || c === '适用车型' ? 35 : (c === '图片' ? 37 : 15)
+    // 将“图片”列宽从 37 调整为 34
+    width: c === 'OEM' || c === '适用车型' ? 35 : (c === '图片' ? 34 : 15)
   }));
 
   worksheet.getRow(1).font = { bold: true };
@@ -218,10 +218,10 @@ export const exportToExcel = async (data: ProcessedRow[], fileName: string) => {
             buffer: imgData.buffer,
             extension: imgData.extension as any,
           });
-          // 调整图片 ext 以适配单元格: 275px (对应 37 列宽) x 95px (对应 71 行高/2.5cm)
+          // 调整图片 ext 以适配单元格: 251px (对应 34 列宽) x 95px (对应 71 行高/2.5cm)
           worksheet.addImage(imageId, {
             tl: { col: colIdx, row: rowNumber - 1 },
-            ext: { width: 275, height: 95 },
+            ext: { width: 251, height: 95 },
             editAs: 'oneCell'
           });
         } catch (e) { console.error(e); }
