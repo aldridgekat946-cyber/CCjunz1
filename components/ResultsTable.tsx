@@ -19,10 +19,15 @@ const ImagePreview: React.FC<{ data?: { buffer: ArrayBuffer; extension: string }
     }
   }, [data]);
 
-  if (!url) return <div className="flex items-center justify-center w-12 h-12 bg-slate-100 rounded text-slate-400"><ImageIcon size={16} /></div>;
+  if (!url) return <div className="flex items-center justify-center w-24 h-10 bg-slate-100 rounded text-slate-400"><ImageIcon size={16} /></div>;
 
   return (
-    <img src={url} alt="Preview" className="w-12 h-12 object-cover rounded border border-slate-200 shadow-sm" />
+    <img 
+      src={url} 
+      alt="Preview" 
+      className="w-24 h-10 object-cover rounded border border-slate-200 shadow-sm" 
+      style={{ aspectRatio: '60 / 25' }}
+    />
   );
 };
 
@@ -44,6 +49,15 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data, onExport }) => {
     '图片',
     '广州价'
   ];
+
+  const renderCellValue = (val: any) => {
+    if (val === null || val === undefined) return "";
+    if (typeof val === 'object') {
+      // 处理 ExcelJS 可能残留的对象结构
+      return val.result ?? val.text ?? String(val);
+    }
+    return String(val);
+  };
 
   if (data.length === 0) return null;
 
@@ -80,16 +94,16 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data, onExport }) => {
               <tr key={startIndex + idx} className="hover:bg-slate-50 transition-colors">
                 <td className="px-6 py-3 text-slate-400 font-mono text-xs">{startIndex + idx + 1}</td>
                 {columns.map((col) => (
-                  <td key={col} className="px-6 py-3 max-w-xs truncate" title={col !== '图片' ? String(row[col] || '') : ''}>
+                  <td key={col} className="px-6 py-3 max-w-xs truncate" title={col !== '图片' ? renderCellValue(row[col]) : ''}>
                     {col === '图片' ? (
                       <ImagePreview data={row['图片数据']} />
-                    ) : row[col] ? (
+                    ) : row[col] !== null ? (
                       <span className={
                         col === 'OEM' ? 'font-medium text-red-600' :
                         col === '输入 OE' ? 'font-medium text-slate-900' : 
                         'text-slate-600'
                       }>
-                        {String(row[col])}
+                        {renderCellValue(row[col])}
                       </span>
                     ) : (
                       <span className="text-slate-300 italic">-</span>
