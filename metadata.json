@@ -1,0 +1,5 @@
+{
+  "name": "PartMatch Pro",
+  "description": "自动匹配汽车零件编号 (OE) 与内部数据库及价格表的工具。",
+  "requestFramePermissions": []
+}
