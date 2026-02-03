@@ -13,7 +13,8 @@
     "lucide-react": "^0.562.0",
     "react": "^19.2.3",
     "xlsx": "0.18.5",
-    "exceljs": "4.4.0"
+    "exceljs": "4.4.0",
+    "@google/genai": "^1.38.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

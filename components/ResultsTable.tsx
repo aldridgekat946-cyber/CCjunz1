@@ -1,15 +1,21 @@
+
 import React, { useState, useEffect } from 'react';
 import { ProcessedRow } from '../types';
-import { ChevronLeft, ChevronRight, Download, ImageIcon } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, ImageIcon, Sparkles } from 'lucide-react';
 
 interface ResultsTableProps {
   data: ProcessedRow[];
+  knownOEs: Set<string>;
   onExport: () => void;
 }
 
+const normalize = (s: any): string => {
+  if (s === null || s === undefined) return "";
+  return String(s).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+};
+
 const ImagePreview: React.FC<{ data?: { buffer: ArrayBuffer; extension: string } | null }> = ({ data }) => {
   const [url, setUrl] = useState<string | null>(null);
-
   useEffect(() => {
     if (data?.buffer) {
       const blob = new Blob([data.buffer], { type: `image/${data.extension}` });
@@ -18,46 +24,41 @@ const ImagePreview: React.FC<{ data?: { buffer: ArrayBuffer; extension: string }
       return () => URL.revokeObjectURL(objectUrl);
     }
   }, [data]);
-
   if (!url) return <div className="flex items-center justify-center w-24 h-9 bg-slate-100 rounded text-slate-400"><ImageIcon size={16} /></div>;
+  return <img src={url} alt="Preview" className="w-24 h-9 object-cover rounded border border-slate-200 shadow-sm" />;
+};
+
+const HighlightedCell: React.FC<{ text: string, inputOE: string, knownOEs: Set<string>, colName: string }> = ({ text, inputOE, knownOEs, colName }) => {
+  if (!text) return null;
+  const inputNorm = normalize(inputOE);
+  const tokens = text.split(/([\s\n,;:/|，；、]+)/);
 
   return (
-    <img 
-      src={url} 
-      alt="Preview" 
-      className="w-24 h-9 object-cover rounded border border-slate-200 shadow-sm" 
-      style={{ aspectRatio: '60 / 21.5' }}
-    />
+    <span className="whitespace-normal break-words">
+      {tokens.map((token, idx) => {
+        if (!token) return null;
+        const normToken = normalize(token);
+        if (normToken === inputNorm) {
+          return <span key={idx} className="text-red-600 font-bold">{token}</span>;
+        }
+        // OEM 列不显示绿色高亮，只有通用OE列显示
+        if (colName === '通用OE' && knownOEs.has(normToken)) {
+          return <span key={idx} className="text-emerald-600 font-bold">{token}</span>;
+        }
+        return <span key={idx}>{token}</span>;
+      })}
+    </span>
   );
 };
 
-const ResultsTable: React.FC<ResultsTableProps> = ({ data, onExport }) => {
+const ResultsTable: React.FC<ResultsTableProps> = ({ data, knownOEs, onExport }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const rowsPerPage = 10;
-  
   const totalPages = Math.ceil(data.length / rowsPerPage);
   const startIndex = (currentPage - 1) * rowsPerPage;
   const currentData = data.slice(startIndex, startIndex + rowsPerPage);
 
-  const columns = [
-    '输入 OE',
-    'XX 编码',
-    '适用车型',
-    '年份',
-    'OEM',
-    '驱动',
-    '图片',
-    '广州价'
-  ];
-
-  const renderCellValue = (val: any) => {
-    if (val === null || val === undefined) return "";
-    if (typeof val === 'object') {
-      // 处理 ExcelJS 可能残留的对象结构
-      return val.result ?? val.text ?? String(val);
-    }
-    return String(val);
-  };
+  const columns = ['输入 OE', 'XX 编码', '适用车型', '年份', 'OEM', '驱动', '图片', '广州价', '产品名', '车型', '通用OE'];
 
   if (data.length === 0) return null;
 
@@ -66,24 +67,26 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data, onExport }) => {
       <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-slate-50/50">
         <div>
           <h3 className="text-lg font-bold text-slate-800">匹配结果</h3>
-          <p className="text-sm text-slate-500">共 {data.length} 条记录 (包含图片提取)</p>
+          <p className="text-sm text-slate-500">共 {data.length} 条记录 (OEM列仅显示红高亮，通用OE列显示绿/红高亮)</p>
         </div>
         <button 
           onClick={onExport}
-          className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
+          className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg transition-colors"
         >
           <Download size={16} />
-          导出包含图片的 Excel
+          导出 Excel
         </button>
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full text-sm text-left">
+        <table className="w-full text-sm text-left table-fixed">
           <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-100">
             <tr>
-              <th className="px-6 py-3 font-semibold">#</th>
+              <th className="w-12 px-4 py-3 font-semibold">#</th>
               {columns.map(col => (
-                <th key={col} className="px-6 py-3 font-semibold whitespace-nowrap">
+                <th key={col} className={`px-4 py-3 font-semibold ${
+                  (col === '车型' || col === '通用OE' || col === 'OEM' || col === '产品名' || col === '适用车型') ? 'w-48' : 'w-32'
+                }`}>
                   {col}
                 </th>
               ))}
@@ -91,22 +94,19 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data, onExport }) => {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {currentData.map((row, idx) => (
-              <tr key={startIndex + idx} className="hover:bg-slate-50 transition-colors">
-                <td className="px-6 py-3 text-slate-400 font-mono text-xs">{startIndex + idx + 1}</td>
-                {columns.map((col) => (
-                  <td key={col} className="px-6 py-3 max-w-xs truncate" title={col !== '图片' ? renderCellValue(row[col]) : ''}>
+              <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                <td className="px-4 py-3 text-slate-400 font-mono text-xs">{startIndex + idx + 1}</td>
+                {columns.map(col => (
+                  <td key={col} className="px-4 py-3 align-middle">
                     {col === '图片' ? (
                       <ImagePreview data={row['图片数据']} />
-                    ) : row[col] !== null ? (
-                      <span className={
-                        col === 'OEM' ? 'font-medium text-red-600' :
-                        col === '输入 OE' ? 'font-medium text-slate-900' : 
-                        'text-slate-600'
-                      }>
-                        {renderCellValue(row[col])}
-                      </span>
+                    ) : (col === 'OEM' || col === '通用OE') ? (
+                      <HighlightedCell text={String(row[col] || "")} inputOE={row['输入 OE']} knownOEs={knownOEs} colName={col} />
                     ) : (
-                      <span className="text-slate-300 italic">-</span>
+                      <span className={`whitespace-normal break-words ${col === '输入 OE' ? 'font-bold' : ''}`}>
+                        {col === '产品名' && !row['XX 编码'] && <Sparkles size={12} className="inline mr-1 text-indigo-400" />}
+                        {String(row[col] || "-")}
+                      </span>
                     )}
                   </td>
                 ))}
@@ -116,28 +116,11 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data, onExport }) => {
         </table>
       </div>
 
-      <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100 bg-slate-50/50">
-        <div className="text-xs text-slate-500">
-          显示第 {startIndex + 1} 至 {Math.min(startIndex + rowsPerPage, data.length)} 条，共 {data.length} 条
-        </div>
+      <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100">
+        <span className="text-xs text-slate-500">第 {currentPage} / {totalPages} 页</span>
         <div className="flex gap-2">
-          <button
-            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-            disabled={currentPage === 1}
-            className="p-1 rounded hover:bg-slate-200 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
-          >
-            <ChevronLeft size={20} />
-          </button>
-          <span className="flex items-center text-xs font-medium text-slate-600 px-2">
-            第 {currentPage} 页 / 共 {totalPages} 页
-          </span>
-          <button
-            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-            disabled={currentPage === totalPages}
-            className="p-1 rounded hover:bg-slate-200 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
-          >
-            <ChevronRight size={20} />
-          </button>
+          <button onClick={() => setCurrentPage(p => Math.max(1, p-1))} disabled={currentPage === 1} className="p-1 rounded hover:bg-slate-100 disabled:opacity-30"><ChevronLeft/></button>
+          <button onClick={() => setCurrentPage(p => Math.min(totalPages, p+1))} disabled={currentPage === totalPages} className="p-1 rounded hover:bg-slate-100 disabled:opacity-30"><ChevronRight/></button>
         </div>
       </div>
     </div>

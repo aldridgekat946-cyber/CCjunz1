@@ -1,3 +1,4 @@
+
 export interface ProcessedRow {
   '输入 OE': string;
   'XX 编码': string | null;
@@ -11,6 +12,9 @@ export interface ProcessedRow {
     extension: string;
   } | null;
   '广州价': string | number | null;
+  '产品名'?: string | null;
+  '车型'?: string | null;
+  '通用OE'?: string | null;
   [key: string]: any;
 }
 
@@ -28,6 +32,7 @@ export interface Box1Data {
   oem: string;
   drive: string;
   picture: string;
+  productName: string;
   price: string | number | null;
   imageData?: {
     buffer: ArrayBuffer;
