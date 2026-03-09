@@ -310,19 +310,7 @@ export const exportToExcel = async (data: ProcessedRow[], fileName: string, know
             if (normT === inputNorm) {
               richText.push({ text: t, font: { color: { argb: 'FFFF0000' }, bold: true } });
             } else {
-              // Rule: 44250 and 44200 are interchangeable
-              let ruleNorm = inputNorm;
-              if (ruleNorm.startsWith('44250')) {
-                ruleNorm = '44200' + ruleNorm.substring(5);
-              } else if (ruleNorm.startsWith('44200')) {
-                ruleNorm = '44250' + ruleNorm.substring(5);
-              }
-
-              if (rowData.isSpecialMatch && normT === ruleNorm) {
-                 richText.push({ text: t, font: { color: { argb: 'FF800080' }, bold: true } }); // Purple
-              } else {
-                 richText.push({ text: t });
-              }
+              richText.push({ text: t });
             }
           } else if (col === '通用OE') {
             // 通用 OE 列只显示绿色高亮 (匹配库内已存在)
