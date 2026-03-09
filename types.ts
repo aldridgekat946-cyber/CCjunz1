@@ -15,6 +15,7 @@ export interface ProcessedRow {
   '产品名'?: string | null;
   '车型'?: string | null;
   '通用OE'?: string | null;
+  isSpecialMatch?: boolean;
   [key: string]: any;
 }
 

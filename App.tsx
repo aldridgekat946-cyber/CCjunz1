@@ -1,9 +1,9 @@
 
 import React, { useState } from 'react';
-import { Settings, Play, RefreshCw, AlertCircle, Sparkles, Search, CheckCircle2, Info } from 'lucide-react';
+import { Settings, Play, RefreshCw, AlertCircle, Sparkles, Search, CheckCircle2, Info, ArrowRight } from 'lucide-react';
 import FileUploader from './components/FileUploader';
 import ResultsTable from './components/ResultsTable';
-import { processFiles, exportToExcel } from './utils/excelProcessor';
+import { processFiles, exportToExcel, fetchPartInfoFromAI, normalize } from './utils/excelProcessor';
 import { ProcessedRow } from './types';
 
 const App: React.FC = () => {
@@ -15,6 +15,10 @@ const App: React.FC = () => {
   const [results, setResults] = useState<ProcessedRow[]>([]);
   const [knownOEs, setKnownOEs] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+
+  // 手动搜索状态
+  const [manualQuery, setManualQuery] = useState("");
+  const [isSearchingManual, setIsSearchingManual] = useState(false);
 
   const handleProcess = async () => {
     if (!refFile || !oeFile) return;
@@ -46,6 +50,40 @@ const App: React.FC = () => {
     }
   };
 
+  const handleManualSearch = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!manualQuery.trim() || isSearchingManual) return;
+
+    setIsSearchingManual(true);
+    const query = manualQuery.trim();
+    
+    try {
+      const aiInfo = await fetchPartInfoFromAI(query);
+      const newRow: ProcessedRow = {
+        '输入 OE': query,
+        'XX 编码': null,
+        '适用车型': null,
+        '年份': null,
+        'OEM': null,
+        '驱动': null,
+        '图片': null,
+        '广州价': null,
+        '产品名': aiInfo.productName,
+        '车型': aiInfo.model,
+        '通用OE': aiInfo.generalOE
+      };
+      
+      // 将新搜索结果插入到列表最前面
+      setResults(prev => [newRow, ...prev]);
+      setManualQuery("");
+    } catch (err) {
+      console.error("Manual search failed:", err);
+      setError("手动搜索失败，请稍后重试");
+    } finally {
+      setIsSearchingManual(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 pb-20 selection:bg-indigo-100">
       {/* Header */}
@@ -71,7 +109,7 @@ const App: React.FC = () => {
 
       <main className="max-w-6xl mx-auto px-4 py-12">
         {/* Hero / Description Section */}
-        <section className="mb-12 text-center max-w-3xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-700">
+        <section className="mb-8 text-center max-w-3xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-700">
           <h2 className="text-4xl font-extrabold text-slate-900 mb-6 tracking-tight">
             自动配件匹配系统 <span className="text-indigo-600">(Pro)</span>
           </h2>
@@ -113,6 +151,49 @@ const App: React.FC = () => {
               </div>
             </div>
           </div>
+        </section>
+
+        {/* Manual Search Section */}
+        <section className="mb-12 max-w-2xl mx-auto animate-in fade-in slide-in-from-bottom-6 duration-700 delay-100">
+          <form onSubmit={handleManualSearch} className="relative group">
+            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+              <Search className="h-5 w-5 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
+            </div>
+            <input 
+              type="text" 
+              value={manualQuery}
+              onChange={(e) => setManualQuery(e.target.value)}
+              placeholder="手动输入 OE 编号进行 AI 即时检索..."
+              className="block w-full pl-11 pr-32 py-4 bg-white border border-slate-200 rounded-2xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 shadow-sm transition-all text-lg font-medium"
+            />
+            <button 
+              type="submit"
+              disabled={!manualQuery.trim() || isSearchingManual}
+              className={`
+                absolute right-2 top-2 bottom-2 px-6 rounded-xl font-bold flex items-center gap-2 transition-all
+                ${isSearchingManual 
+                  ? "bg-slate-100 text-slate-400 cursor-not-allowed" 
+                  : "bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 shadow-md shadow-indigo-200"
+                }
+              `}
+            >
+              {isSearchingManual ? (
+                <>
+                  <RefreshCw className="animate-spin" size={18} />
+                  检索中
+                </>
+              ) : (
+                <>
+                  <span>搜索</span>
+                  <ArrowRight size={18} />
+                </>
+              )}
+            </button>
+          </form>
+          <p className="mt-3 text-center text-xs text-slate-400 flex items-center justify-center gap-1">
+            <Info size={12} />
+            输入单个 OE 号即可快速获取产品名、适用车型及通用 OE 数据
+          </p>
         </section>
 
         {/* Uploaders */}
@@ -186,7 +267,7 @@ const App: React.FC = () => {
             >
               <span className="flex items-center gap-3">
                 <Play size={20} fill="currentColor" />
-                开始高效匹配
+                开始高效批量匹配
               </span>
             </button>
           )}

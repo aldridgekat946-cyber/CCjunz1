@@ -4,7 +4,7 @@ import ExcelJS from 'exceljs';
 import { GoogleGenAI, Type } from "@google/genai";
 import { Box1Data, ProcessedRow } from '../types';
 
-const normalize = (s: any): string => {
+export const normalize = (s: any): string => {
   if (s === null || s === undefined) return "";
   const str = typeof s === 'object' ? (s.text || s.result || String(s)) : String(s);
   return str.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
@@ -56,10 +56,18 @@ async function callWithRetry<T>(
 }
 
 /**
+ * AI 检索结果缓存，避免重复查询
+ */
+const aiCache: Record<string, { productName: string, model: string, generalOE: string }> = {};
+
+/**
  * 优化后的 AI 检索：使用 Google Search 快速获取零件信息
  */
-async function fetchPartInfoFromAI(oe: string): Promise<{ productName: string, model: string, generalOE: string }> {
-  return await callWithRetry(async () => {
+export async function fetchPartInfoFromAI(oe: string): Promise<{ productName: string, model: string, generalOE: string }> {
+  const normOE = normalize(oe);
+  if (aiCache[normOE]) return aiCache[normOE];
+
+  const result = await callWithRetry(async () => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
@@ -86,6 +94,11 @@ async function fetchPartInfoFromAI(oe: string): Promise<{ productName: string, m
     const text = response.text;
     return JSON.parse(text || "{}");
   });
+
+  if (result && result.productName) {
+    aiCache[normOE] = result;
+  }
+  return result;
 }
 
 export const processFiles = async (
@@ -150,6 +163,16 @@ export const processFiles = async (
             imageData: imageMap[rowNumber] || null
           };
         }
+        // Rule: 44250 and 44200 are interchangeable
+        let ruleNorm = norm;
+        if (ruleNorm.startsWith('44250')) {
+          ruleNorm = '44200' + ruleNorm.substring(5);
+        } else if (ruleNorm.startsWith('44200')) {
+          ruleNorm = '44250' + ruleNorm.substring(5);
+        }
+        if (ruleNorm !== norm && !mapRef[ruleNorm]) {
+          mapRef[ruleNorm] = mapRef[norm];
+        }
       }
     }
   });
@@ -166,13 +189,31 @@ export const processFiles = async (
   const results: ProcessedRow[] = [];
   const startIdx = (typeof dataOeRaw[0][oeInputCol] === 'string' && dataOeRaw[0][oeInputCol].length > 0) ? 1 : 0;
 
+  // 1. 预处理所有行，识别需要 AI 检索的项
+  const tasks: { index: number; inputOE: string; normInput: string; match: Box1Data | null }[] = [];
   for (let i = startIdx; i < dataOeRaw.length; i++) {
     const row = dataOeRaw[i];
     if (!row || !row[oeInputCol]) continue;
     const inputOE = String(row[oeInputCol]).trim();
     const normInput = normalize(inputOE);
-    const match = mapRef[normInput];
+    tasks.push({ index: i, inputOE, normInput, match: mapRef[normInput] });
+  }
 
+  // 2. 并行处理逻辑 (带并发控制)
+  const CONCURRENCY = 5; // 同时进行的 AI 请求数
+  const totalTasks = tasks.length;
+  let completedCount = 0;
+
+  const processTask = async (task: typeof tasks[0]) => {
+    const { inputOE, match } = task;
+    const normInput = normalize(inputOE);
+    let isSpecialMatch = false;
+    if (match) {
+        const normOEM = normalize(match.oem);
+        if (normInput !== normOEM) {
+            isSpecialMatch = true;
+        }
+    }
     const newRow: ProcessedRow = {
       '输入 OE': inputOE,
       'XX 编码': match?.xxCode || null,
@@ -185,26 +226,45 @@ export const processFiles = async (
       '广州价': match?.price || null,
       '产品名': match?.productName || null,
       '车型': null,
-      '通用OE': null
+      '通用OE': null,
+      isSpecialMatch
     };
 
     if (!match) {
-      onProgress?.(`正在 AI 检索: ${inputOE}...`);
       try {
-        await new Promise(r => setTimeout(r, 600)); // 频率控制
-        const aiInfo = await fetchPartInfoFromAI(inputOE);
-        newRow['产品名'] = aiInfo.productName;
-        newRow['车型'] = aiInfo.model;
-        newRow['通用OE'] = aiInfo.generalOE;
+        // 检查缓存
+        const normInput = normalize(inputOE);
+        if (aiCache[normInput]) {
+          const aiInfo = aiCache[normInput];
+          newRow['产品名'] = aiInfo.productName;
+          newRow['车型'] = aiInfo.model;
+          newRow['通用OE'] = aiInfo.generalOE;
+        } else {
+          onProgress?.(`正在 AI 检索 (${completedCount + 1}/${totalTasks}): ${inputOE}...`);
+          const aiInfo = await fetchPartInfoFromAI(inputOE);
+          newRow['产品名'] = aiInfo.productName;
+          newRow['车型'] = aiInfo.model;
+          newRow['通用OE'] = aiInfo.generalOE;
+        }
       } catch (e) {
-        newRow['产品名'] = "检索超限或错误";
+        newRow['产品名'] = "检索失败";
       }
     }
 
-    results.push(newRow);
+    completedCount++;
+    return newRow;
+  };
+
+  // 使用并发控制执行所有任务
+  const finalResults: ProcessedRow[] = [];
+  for (let i = 0; i < tasks.length; i += CONCURRENCY) {
+    const batch = tasks.slice(i, i + CONCURRENCY);
+    const batchResults = await Promise.all(batch.map(task => processTask(task)));
+    finalResults.push(...batchResults);
+    onProgress?.(`已完成: ${Math.round((finalResults.length / totalTasks) * 100)}%`);
   }
 
-  return { results, knownOEs };
+  return { results: finalResults, knownOEs };
 };
 
 export const exportToExcel = async (data: ProcessedRow[], fileName: string, knownOEs: Set<string>) => {
@@ -244,13 +304,33 @@ export const exportToExcel = async (data: ProcessedRow[], fileName: string, know
         tokens.forEach(t => {
           if (!t) return;
           const normT = normalize(t);
-          if (normT === inputNorm) {
-            richText.push({ text: t, font: { color: { argb: 'FFFF0000' }, bold: true } });
-          } else if (col === '通用OE' && knownOEs.has(normT)) {
-            // 通用 OE 列保留绿色高亮
-            richText.push({ text: t, font: { color: { argb: 'FF00B050' }, bold: true } });
-          } else {
-            richText.push({ text: t });
+          
+          if (col === 'OEM') {
+            // OEM 列只显示红色高亮 (匹配输入 OE)
+            if (normT === inputNorm) {
+              richText.push({ text: t, font: { color: { argb: 'FFFF0000' }, bold: true } });
+            } else {
+              // Rule: 44250 and 44200 are interchangeable
+              let ruleNorm = inputNorm;
+              if (ruleNorm.startsWith('44250')) {
+                ruleNorm = '44200' + ruleNorm.substring(5);
+              } else if (ruleNorm.startsWith('44200')) {
+                ruleNorm = '44250' + ruleNorm.substring(5);
+              }
+
+              if (rowData.isSpecialMatch && normT === ruleNorm) {
+                 richText.push({ text: t, font: { color: { argb: 'FF800080' }, bold: true } }); // Purple
+              } else {
+                 richText.push({ text: t });
+              }
+            }
+          } else if (col === '通用OE') {
+            // 通用 OE 列只显示绿色高亮 (匹配库内已存在)
+            if (knownOEs.has(normT)) {
+              richText.push({ text: t, font: { color: { argb: 'FF00B050' }, bold: true } });
+            } else {
+              richText.push({ text: t });
+            }
           }
         });
         cell.value = richText.length > 0 ? { richText } : val;
