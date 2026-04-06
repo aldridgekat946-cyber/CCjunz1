@@ -70,7 +70,7 @@ export async function fetchPartInfoFromAI(oe: string): Promise<{ productName: st
   const result = await callWithRetry(async () => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-3.1-flash-lite-preview',
       contents: `Search for automotive part info for OE "${oe}". 
       Required (JSON only):
       - productName: Basic type (e.g. Starter)
@@ -209,9 +209,17 @@ export const processFiles = async (
     const normInput = normalize(inputOE);
     let isSpecialMatch = false;
     if (match) {
-        const normOEM = normalize(match.oem);
-        if (normInput !== normOEM) {
-            isSpecialMatch = true;
+        const oemTokens = String(match.oem).split(/[\s\n,;:/|，；、]+/).map(t => normalize(t)).filter(t => t.length > 0);
+        if (!oemTokens.includes(normInput)) {
+            let ruleNorm = normInput;
+            if (ruleNorm.startsWith('44250')) {
+              ruleNorm = '44200' + ruleNorm.substring(5);
+            } else if (ruleNorm.startsWith('44200')) {
+              ruleNorm = '44250' + ruleNorm.substring(5);
+            }
+            if (oemTokens.includes(ruleNorm)) {
+                isSpecialMatch = true;
+            }
         }
     }
     const newRow: ProcessedRow = {
@@ -306,9 +314,18 @@ export const exportToExcel = async (data: ProcessedRow[], fileName: string, know
           const normT = normalize(t);
           
           if (col === 'OEM') {
-            // OEM 列只显示红色高亮 (匹配输入 OE)
+            let ruleNorm = inputNorm;
+            if (ruleNorm.startsWith('44250')) {
+              ruleNorm = '44200' + ruleNorm.substring(5);
+            } else if (ruleNorm.startsWith('44200')) {
+              ruleNorm = '44250' + ruleNorm.substring(5);
+            }
+
+            // OEM 列只显示红色高亮 (匹配输入 OE) 或紫色高亮 (特殊规则匹配)
             if (normT === inputNorm) {
               richText.push({ text: t, font: { color: { argb: 'FFFF0000' }, bold: true } });
+            } else if (rowData.isSpecialMatch && normT === ruleNorm) {
+              richText.push({ text: t, font: { color: { argb: 'FF800080' }, bold: true } });
             } else {
               richText.push({ text: t });
             }
