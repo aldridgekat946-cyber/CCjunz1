@@ -70,7 +70,7 @@ export async function fetchPartInfoFromAI(oe: string): Promise<{ productName: st
   const result = await callWithRetry(async () => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite-preview',
+      model: 'gemini-3.1-flash-lite',
       contents: `Search for automotive part info for OE "${oe}". 
       Required (JSON only):
       - productName: Basic type (e.g. Starter)
