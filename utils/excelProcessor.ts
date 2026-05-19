@@ -144,36 +144,49 @@ export const processFiles = async (
   refWorksheet.eachRow((row, rowNumber) => {
     if (rowNumber <= headerRowIndex) return;
     const oemRaw = getCellValue(row.getCell(oemColIdx));
-    if (!oemRaw) return;
-    const tokens = String(oemRaw).split(/[\s\n,;:/|，；、]+/);
-    for (const token of tokens) {
-      const norm = normalize(token);
-      if (norm.length > 2) {
-        knownOEs.add(norm);
-        if (!mapRef[norm]) {
-          mapRef[norm] = {
-            xxCode: xxColIdx !== -1 ? String(getCellValue(row.getCell(xxColIdx)) || "") : "",
-            application: appColIdx !== -1 ? String(getCellValue(row.getCell(appColIdx)) || "") : "",
-            year: yearColIdx !== -1 ? String(getCellValue(row.getCell(yearColIdx)) || "") : "", 
-            oem: String(oemRaw),
-            drive: driveColIdx !== -1 ? String(getCellValue(row.getCell(driveColIdx)) || "") : "",
-            picture: "已提取",
-            productName: prodColIdx !== -1 ? String(getCellValue(row.getCell(prodColIdx)) || "") : "",
-            price: priceColIdx !== -1 ? getCellValue(row.getCell(priceColIdx)) : null,
-            imageData: imageMap[rowNumber] || null
-          };
+    const xxCodeRaw = xxColIdx !== -1 ? getCellValue(row.getCell(xxColIdx)) : "";
+    
+    if (!oemRaw && !xxCodeRaw) return;
+
+    const data: Box1Data = {
+        xxCode: xxCodeRaw ? String(xxCodeRaw) : "",
+        application: appColIdx !== -1 ? String(getCellValue(row.getCell(appColIdx)) || "") : "",
+        year: yearColIdx !== -1 ? String(getCellValue(row.getCell(yearColIdx)) || "") : "", 
+        oem: oemRaw ? String(oemRaw) : "",
+        drive: driveColIdx !== -1 ? String(getCellValue(row.getCell(driveColIdx)) || "") : "",
+        picture: "已提取",
+        productName: prodColIdx !== -1 ? String(getCellValue(row.getCell(prodColIdx)) || "") : "",
+        price: priceColIdx !== -1 ? getCellValue(row.getCell(priceColIdx)) : null,
+        imageData: imageMap[rowNumber] || null
+    };
+
+    if (oemRaw) {
+        const tokens = String(oemRaw).split(/[\s\n,;:/|，；、]+/);
+        for (const token of tokens) {
+            const norm = normalize(token);
+            if (norm.length > 2) {
+                knownOEs.add(norm);
+                if (!mapRef[norm]) mapRef[norm] = data;
+                
+                // Rule: 44250 and 44200 are interchangeable
+                let ruleNorm = norm;
+                if (ruleNorm.startsWith('44250')) {
+                    ruleNorm = '44200' + ruleNorm.substring(5);
+                } else if (ruleNorm.startsWith('44200')) {
+                    ruleNorm = '44250' + ruleNorm.substring(5);
+                }
+                if (ruleNorm !== norm && !mapRef[ruleNorm]) {
+                    mapRef[ruleNorm] = mapRef[norm];
+                }
+            }
         }
-        // Rule: 44250 and 44200 are interchangeable
-        let ruleNorm = norm;
-        if (ruleNorm.startsWith('44250')) {
-          ruleNorm = '44200' + ruleNorm.substring(5);
-        } else if (ruleNorm.startsWith('44200')) {
-          ruleNorm = '44250' + ruleNorm.substring(5);
+    }
+    
+    if (xxCodeRaw) {
+        const normXx = normalize(xxCodeRaw);
+        if (normXx.length > 2) {
+            if (!mapRef[normXx]) mapRef[normXx] = data;
         }
-        if (ruleNorm !== norm && !mapRef[ruleNorm]) {
-          mapRef[ruleNorm] = mapRef[norm];
-        }
-      }
     }
   });
 
@@ -188,91 +201,63 @@ export const processFiles = async (
 
   const results: ProcessedRow[] = [];
   const startIdx = (typeof dataOeRaw[0][oeInputCol] === 'string' && dataOeRaw[0][oeInputCol].length > 0) ? 1 : 0;
+  
+  const totalRows = dataOeRaw.length - startIdx;
+  let processedRows = 0;
 
-  // 1. 预处理所有行，识别需要 AI 检索的项
-  const tasks: { index: number; inputOE: string; normInput: string; match: Box1Data | null }[] = [];
   for (let i = startIdx; i < dataOeRaw.length; i++) {
     const row = dataOeRaw[i];
     if (!row || !row[oeInputCol]) continue;
-    const inputOE = String(row[oeInputCol]).trim();
-    const normInput = normalize(inputOE);
-    tasks.push({ index: i, inputOE, normInput, match: mapRef[normInput] });
-  }
-
-  // 2. 并行处理逻辑 (带并发控制)
-  const CONCURRENCY = 5; // 同时进行的 AI 请求数
-  const totalTasks = tasks.length;
-  let completedCount = 0;
-
-  const processTask = async (task: typeof tasks[0]) => {
-    const { inputOE, match } = task;
-    const normInput = normalize(inputOE);
-    let isSpecialMatch = false;
-    if (match) {
-        const oemTokens = String(match.oem).split(/[\s\n,;:/|，；、]+/).map(t => normalize(t)).filter(t => t.length > 0);
-        if (!oemTokens.includes(normInput)) {
-            let ruleNorm = normInput;
-            if (ruleNorm.startsWith('44250')) {
-              ruleNorm = '44200' + ruleNorm.substring(5);
-            } else if (ruleNorm.startsWith('44200')) {
-              ruleNorm = '44250' + ruleNorm.substring(5);
-            }
-            if (oemTokens.includes(ruleNorm)) {
-                isSpecialMatch = true;
-            }
+    
+    const rawInputOE = String(row[oeInputCol]);
+    const inputTokens = rawInputOE.split(/[\s\n,;:/|，；、]+/).filter(t => t.trim().length > 0);
+    
+    let matchedData = null;
+    // 1. 尝试本地匹配
+    for (const token of inputTokens) {
+        const norm = normalize(token);
+        if (mapRef[norm]) {
+            matchedData = mapRef[norm];
+            break;
         }
     }
+
     const newRow: ProcessedRow = {
-      '输入 OE': inputOE,
-      'XX 编码': match?.xxCode || null,
-      '适用车型': match?.application || null,
-      '年份': match?.year || null,
-      'OEM': match?.oem || null,
-      '驱动': match?.drive || null,
-      '图片': match?.imageData ? "匹配成功" : null,
-      '图片数据': match?.imageData || null,
-      '广州价': match?.price || null,
-      '产品名': match?.productName || null,
+      '输入 OE': rawInputOE,
+      'XX 编码': matchedData?.xxCode || null,
+      '适用车型': matchedData?.application || null,
+      '年份': matchedData?.year || null,
+      'OEM': matchedData?.oem || null,
+      '驱动': matchedData?.drive || null,
+      '图片': matchedData?.imageData ? "匹配成功" : null,
+      '图片数据': matchedData?.imageData || null,
+      '广州价': matchedData?.price || null,
+      '产品名': matchedData?.productName || null,
       '车型': null,
       '通用OE': null,
-      isSpecialMatch
+      isSpecialMatch: false
     };
 
-    if (!match) {
+    // 2. 如果没匹配到，只用第一个 OE 联网检索 (但保留所有输入的 OE)
+    if (!matchedData && inputTokens.length > 0) {
       try {
-        // 检查缓存
-        const normInput = normalize(inputOE);
-        if (aiCache[normInput]) {
-          const aiInfo = aiCache[normInput];
-          newRow['产品名'] = aiInfo.productName;
-          newRow['车型'] = aiInfo.model;
-          newRow['通用OE'] = aiInfo.generalOE;
-        } else {
-          onProgress?.(`正在 AI 检索 (${completedCount + 1}/${totalTasks}): ${inputOE}...`);
-          const aiInfo = await fetchPartInfoFromAI(inputOE);
-          newRow['产品名'] = aiInfo.productName;
-          newRow['车型'] = aiInfo.model;
-          newRow['通用OE'] = aiInfo.generalOE;
-        }
+        const firstToken = inputTokens[0];
+        onProgress?.(`正在 AI 检索 (${processedRows + 1}/${totalRows}): ${firstToken}...`);
+        const aiInfo = await fetchPartInfoFromAI(firstToken);
+        newRow['产品名'] = aiInfo.productName;
+        newRow['车型'] = aiInfo.model;
+        newRow['通用OE'] = aiInfo.generalOE;
       } catch (e) {
         newRow['产品名'] = "检索失败";
       }
     }
-
-    completedCount++;
-    return newRow;
-  };
-
-  // 使用并发控制执行所有任务
-  const finalResults: ProcessedRow[] = [];
-  for (let i = 0; i < tasks.length; i += CONCURRENCY) {
-    const batch = tasks.slice(i, i + CONCURRENCY);
-    const batchResults = await Promise.all(batch.map(task => processTask(task)));
-    finalResults.push(...batchResults);
-    onProgress?.(`已完成: ${Math.round((finalResults.length / totalTasks) * 100)}%`);
+    
+    results.push(newRow);
+    processedRows++;
+    onProgress?.(`已完成: ${Math.round((processedRows / totalRows) * 100)}%`);
   }
 
-  return { results: finalResults, knownOEs };
+  return { results, knownOEs };
 };
 
 export const exportToExcel = async (data: ProcessedRow[], fileName: string, knownOEs: Set<string>) => {
