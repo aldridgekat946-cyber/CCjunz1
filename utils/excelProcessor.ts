@@ -213,11 +213,19 @@ export const processFiles = async (
     const inputTokens = rawInputOE.split(/[\s\n,;:/|，；、]+/).filter(t => t.trim().length > 0);
     
     let matchedData = null;
+    let isSpecialMatch = false;
     // 1. 尝试本地匹配
     for (const token of inputTokens) {
         const norm = normalize(token);
         if (mapRef[norm]) {
             matchedData = mapRef[norm];
+            
+            const oemTokens = String(matchedData.oem || "").split(/[\s\n,;:/|，；、]+/).map(t => normalize(t)).filter(t => t.length > 0);
+            const xxCodeNorm = normalize(matchedData.xxCode);
+            
+            if (!oemTokens.includes(norm) && norm !== xxCodeNorm) {
+                isSpecialMatch = true;
+            }
             break;
         }
     }
@@ -235,7 +243,7 @@ export const processFiles = async (
       '产品名': matchedData?.productName || null,
       '车型': null,
       '通用OE': null,
-      isSpecialMatch: false
+      isSpecialMatch
     };
 
     // 2. 如果没匹配到，只用第一个 OE 联网检索 (但保留所有输入的 OE)
@@ -299,17 +307,18 @@ export const exportToExcel = async (data: ProcessedRow[], fileName: string, know
           const normT = normalize(t);
           
           if (col === 'OEM') {
-            let ruleNorm = inputNorm;
-            if (ruleNorm.startsWith('44250')) {
-              ruleNorm = '44200' + ruleNorm.substring(5);
-            } else if (ruleNorm.startsWith('44200')) {
-              ruleNorm = '44250' + ruleNorm.substring(5);
-            }
+            const inputTokens = String(rowData['输入 OE'] || "").split(/[\s\n,;:/|，；、]+/).filter(t => t.trim().length > 0);
+            const inputNorms = inputTokens.map(t => normalize(t));
+            const ruleNorms = inputNorms.map(norm => {
+              if (norm.startsWith('44250')) return '44200' + norm.substring(5);
+              if (norm.startsWith('44200')) return '44250' + norm.substring(5);
+              return norm;
+            });
 
             // OEM 列只显示红色高亮 (匹配输入 OE) 或紫色高亮 (特殊规则匹配)
-            if (normT === inputNorm) {
+            if (inputNorms.includes(normT)) {
               richText.push({ text: t, font: { color: { argb: 'FFFF0000' }, bold: true } });
-            } else if (rowData.isSpecialMatch && normT === ruleNorm) {
+            } else if (rowData.isSpecialMatch && ruleNorms.includes(normT)) {
               richText.push({ text: t, font: { color: { argb: 'FF800080' }, bold: true } });
             } else {
               richText.push({ text: t });

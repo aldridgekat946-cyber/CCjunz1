@@ -30,15 +30,15 @@ const ImagePreview: React.FC<{ data?: { buffer: ArrayBuffer; extension: string }
 
 const HighlightedCell: React.FC<{ text: string, inputOE: string, knownOEs: Set<string>, colName: string, isSpecialMatch?: boolean }> = ({ text, inputOE, knownOEs, colName, isSpecialMatch }) => {
   if (!text) return null;
-  const inputNorm = normalize(inputOE);
+
+  const inputTokens = String(inputOE || "").split(/[\s\n,;:/|，；、]+/).filter(t => t.trim().length > 0);
+  const inputNorms = inputTokens.map(t => normalize(t));
   
-  // Rule: 44250 and 44200 are interchangeable
-  let ruleNorm = inputNorm;
-  if (ruleNorm.startsWith('44250')) {
-    ruleNorm = '44200' + ruleNorm.substring(5);
-  } else if (ruleNorm.startsWith('44200')) {
-    ruleNorm = '44250' + ruleNorm.substring(5);
-  }
+  const ruleNorms = inputNorms.map(norm => {
+    if (norm.startsWith('44250')) return '44200' + norm.substring(5);
+    if (norm.startsWith('44200')) return '44250' + norm.substring(5);
+    return norm;
+  });
 
   const tokens = text.split(/([\s\n,;:/|，；、]+)/);
 
@@ -50,9 +50,9 @@ const HighlightedCell: React.FC<{ text: string, inputOE: string, knownOEs: Set<s
         
         if (colName === 'OEM') {
           // OEM 列高亮
-          if (normToken === inputNorm) {
+          if (inputNorms.includes(normToken)) {
             return <span key={idx} className="text-red-600 font-bold">{token}</span>;
-          } else if (isSpecialMatch && normToken === ruleNorm) {
+          } else if (isSpecialMatch && ruleNorms.includes(normToken)) {
             // 触发特殊规则匹配 (44250/44200)
             return <span key={idx} className="text-purple-600 font-bold">{token}</span>;
           }
