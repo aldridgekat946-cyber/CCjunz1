@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { Settings, Play, RefreshCw, AlertCircle, Sparkles, Search, CheckCircle2, Info, ArrowRight } from 'lucide-react';
 import FileUploader from './components/FileUploader';
 import ResultsTable from './components/ResultsTable';
+import { PackingCalculator } from './components/PackingCalculator';
 import { processFiles, exportToExcel, fetchPartInfoFromAI, normalize } from './utils/excelProcessor';
 import { ProcessedRow } from './types';
 
@@ -15,6 +16,9 @@ const App: React.FC = () => {
   const [results, setResults] = useState<ProcessedRow[]>([]);
   const [knownOEs, setKnownOEs] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+
+  // Tabs
+  const [activeTab, setActiveTab] = useState<'search' | 'packing'>('search');
 
   // 手动搜索状态
   const [manualQuery, setManualQuery] = useState("");
@@ -107,9 +111,30 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-12">
-        {/* Hero / Description Section */}
-        <section className="mb-8 text-center max-w-3xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-700">
+      <main className="max-w-6xl mx-auto px-4 py-8">
+        
+        {/* Tabs */}
+        <div className="flex justify-center mb-8">
+          <div className="bg-slate-200/50 p-1.5 rounded-2xl flex gap-1">
+            <button
+              onClick={() => setActiveTab('search')}
+              className={`px-8 py-3 rounded-xl font-bold text-sm transition-all duration-300 ${activeTab === 'search' ? 'bg-white text-indigo-700 shadow-md shadow-slate-200/50 scale-100' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200 scale-95'}`}
+            >
+              配件检索
+            </button>
+            <button
+              onClick={() => setActiveTab('packing')}
+              className={`px-8 py-3 rounded-xl font-bold text-sm transition-all duration-300 ${activeTab === 'packing' ? 'bg-white text-indigo-700 shadow-md shadow-slate-200/50 scale-100' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200 scale-95'}`}
+            >
+              体积 / 面积 / 重量
+            </button>
+          </div>
+        </div>
+
+        {activeTab === 'search' ? (
+          <>
+            {/* Hero / Description Section */}
+            <section className="mb-8 text-center max-w-3xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-700">
           <h2 className="text-4xl font-extrabold text-slate-900 mb-6 tracking-tight">
             自动配件匹配系统 <span className="text-indigo-600">(Pro)</span>
           </h2>
@@ -281,6 +306,12 @@ const App: React.FC = () => {
               knownOEs={knownOEs} 
               onExport={() => exportToExcel(results, `匹配结果_${new Date().toISOString().slice(0,10)}.xlsx`, knownOEs)} 
             />
+          </div>
+        )}
+          </>
+        ) : (
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <PackingCalculator />
           </div>
         )}
       </main>
