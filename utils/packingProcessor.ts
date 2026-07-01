@@ -38,114 +38,157 @@ function parseDimensions(dimStr: string) {
 
 export const processPackingReference = async (file: File) => {
   const buf = await file.arrayBuffer();
-  const wb = XLSX.read(buf, { type: 'array' });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buf);
   
-  const boxSheetName = wb.SheetNames.find(n => n.includes('内外纸箱'));
-  const weightSheetName = wb.SheetNames.find(n => n.includes('重量'));
+  const sheetNames = workbook.worksheets.map(ws => ws.name);
+  const requiredSheets = ['Sheet1', 'Sheet2', '内外纸箱', '重量'];
+  const missingSheets = requiredSheets.filter(req => !sheetNames.some(n => n.includes(req)));
   
-  if (!boxSheetName || !weightSheetName) {
-    throw new Error('参考库文件必须包含“内外纸箱”和“重量”两个Sheet页。');
+  if (missingSheets.length > 0) {
+    throw new Error(`参考库文件缺少以下Sheet页: ${missingSheets.join(', ')}`);
   }
 
-  // 1. 解析重量
-  const weightSheet = wb.Sheets[weightSheetName];
-  const weightDataRaw = XLSX.utils.sheet_to_json<any[]>(weightSheet, { header: 1 });
+  // 1. 重量
+  const weightSheet = workbook.worksheets.find(ws => ws.name.includes('重量'))!;
   const weightsMap = new Map<string, number>();
   
-  let headerRow = 0;
-  for (let i=0; i<Math.min(10, weightDataRaw.length); i++) {
-      if (findColIndex(weightDataRaw[i], ['XX CODE', 'XX编码', 'XX 编码']) !== -1) {
-          headerRow = i; break;
-      }
+  let wHeaderRow = 1;
+  let wCodeCol = -1;
+  let wWeightCol = -1;
+  for (let i = 1; i <= 10; i++) {
+    const rowValues = weightSheet.getRow(i).values as any[];
+    wCodeCol = findColIndex(rowValues, ['XX CODE', 'XX编码', 'XX 编码']);
+    wWeightCol = findColIndex(rowValues, ['重量']);
+    if (wCodeCol !== -1 && wWeightCol !== -1) {
+      wHeaderRow = i; break;
+    }
   }
-  const wHeaders = weightDataRaw[headerRow];
-  const wCodeCol = findColIndex(wHeaders, ['XX CODE', 'XX编码', 'XX 编码']);
-  const weightCol = findColIndex(wHeaders, ['重量']);
   
-  if (wCodeCol !== -1 && weightCol !== -1) {
-      for (let i = headerRow + 1; i < weightDataRaw.length; i++) {
-          const row = weightDataRaw[i];
-          if (!row || !row[wCodeCol]) continue;
-          
-          const codeNorm = normalize(row[wCodeCol]);
-          let rawWeight = row[weightCol];
-          if (typeof rawWeight === 'string') {
-              rawWeight = parseFloat(rawWeight.replace(/[^\d.-]/g, ''));
-          }
-          if (typeof rawWeight === 'number' && !isNaN(rawWeight)) {
-              weightsMap.set(codeNorm, rawWeight);
-          }
-      }
-  }
+  weightSheet.eachRow((row, rowNumber) => {
+    if (rowNumber <= wHeaderRow) return;
+    const code = String(getCellValue(row.getCell(wCodeCol))).trim();
+    if (!code) return;
+    const codeNorm = normalize(code);
+    let rawWeight = getCellValue(row.getCell(wWeightCol));
+    if (typeof rawWeight === 'string') {
+      rawWeight = parseFloat(rawWeight.replace(/[^\d.-]/g, ''));
+    }
+    if (typeof rawWeight === 'number' && !isNaN(rawWeight)) {
+      weightsMap.set(codeNorm, rawWeight);
+    }
+  });
 
-  // 2. 解析纸箱
-  const boxSheet = wb.Sheets[boxSheetName];
-  const boxDataRaw = XLSX.utils.sheet_to_json<any[]>(boxSheet, { header: 1 });
+  // 2. 内外纸箱
+  const boxSheet = workbook.worksheets.find(ws => ws.name.includes('内外纸箱'))!;
+  const specsMap = new Map<string, PackingSpec>(); 
   
-  let bHeaderRow = 0;
-  for (let i=0; i<Math.min(10, boxDataRaw.length); i++) {
-      if (findColIndex(boxDataRaw[i], ['XX CODE', 'XX编码', '产品号']) !== -1) {
-          bHeaderRow = i; break;
-      }
-  }
-  const bHeaders = boxDataRaw[bHeaderRow];
-  const bCodeCol = findColIndex(bHeaders, ['XX CODE']);
-  const matNameCol = findColIndex(bHeaders, ['物料名称']);
-  const matCodeCol = findColIndex(bHeaders, ['物料代码']);
-  const specCol = findColIndex(bHeaders, ['规格']);
-  const usageCol = findColIndex(bHeaders, ['用量']);
-
-  const specsMap = new Map<string, PackingSpec>(); // fullCode -> Spec
-
-  for (let i = bHeaderRow + 1; i < boxDataRaw.length; i++) {
-      const row = boxDataRaw[i];
-      if (!row || !row[bCodeCol]) continue;
-      
-      const fullCode = String(row[bCodeCol]).trim();
-      const matName = String(row[matNameCol] || "");
-      const matCode = String(row[matCodeCol] || "");
-      const specDim = parseDimensions(String(row[specCol] || ""));
-      const usageRaw = row[usageCol];
-      
-      if (!fullCode || !specDim) continue;
-      
-      let usage = 0;
-      if (typeof usageRaw === 'number') usage = usageRaw;
-      else if (typeof usageRaw === 'string') usage = parseFloat(usageRaw);
-      
-      let capacity = usage > 0 ? Math.round(1 / usage) : 0;
-
-      if (!specsMap.has(fullCode)) {
-          specsMap.set(fullCode, { fullCode, innerBox: null, outerBox: null });
-      }
-      
-      const spec = specsMap.get(fullCode)!;
-      
-      if (matName.includes('内')) {
-          spec.innerBox = {
-              materialCode: matCode,
-              length: specDim.l,
-              width: specDim.w,
-              height: specDim.h,
-              capacity: capacity > 0 ? capacity : 1 // fallback inner = 1
-          };
-      } else if (matName.includes('外') || matName.includes('箱')) {
-          spec.outerBox = {
-              materialCode: matCode,
-              length: specDim.l,
-              width: specDim.w,
-              height: specDim.h,
-              capacity: capacity > 0 ? capacity : 2 // fallback outer = 2
-          };
-      }
+  let bHeaderRow = 1;
+  let bCodeCol = -1, matNameCol = -1, matCodeCol = -1, specCol = -1, usageCol = -1;
+  for (let i = 1; i <= 10; i++) {
+    const rowValues = boxSheet.getRow(i).values as any[];
+    bCodeCol = findColIndex(rowValues, ['XX CODE']);
+    matNameCol = findColIndex(rowValues, ['物料名称']);
+    matCodeCol = findColIndex(rowValues, ['物料代码']);
+    specCol = findColIndex(rowValues, ['规格']);
+    usageCol = findColIndex(rowValues, ['用量']);
+    if (bCodeCol !== -1 && matNameCol !== -1) {
+      bHeaderRow = i; break;
+    }
   }
 
-  return { specs: Array.from(specsMap.values()), weights: weightsMap };
+  boxSheet.eachRow((row, rowNumber) => {
+    if (rowNumber <= bHeaderRow) return;
+    const fullCode = String(getCellValue(row.getCell(bCodeCol))).trim();
+    if (!fullCode) return;
+    
+    const matName = String(getCellValue(row.getCell(matNameCol)));
+    const matCode = String(getCellValue(row.getCell(matCodeCol)));
+    const specDim = parseDimensions(String(getCellValue(row.getCell(specCol))));
+    const usageRaw = getCellValue(row.getCell(usageCol));
+    
+    if (!specDim) return;
+    
+    let usage = 0;
+    if (typeof usageRaw === 'number') usage = usageRaw;
+    else if (typeof usageRaw === 'string') usage = parseFloat(usageRaw);
+    
+    let capacity = usage > 0 ? Math.round(1 / usage) : 0;
+
+    if (!specsMap.has(fullCode)) {
+      specsMap.set(fullCode, { fullCode, innerBox: null, outerBox: null });
+    }
+    const spec = specsMap.get(fullCode)!;
+    
+    if (matName.includes('内')) {
+      spec.innerBox = {
+        materialCode: matCode,
+        length: specDim.l,
+        width: specDim.w,
+        height: specDim.h,
+        capacity: capacity > 0 ? capacity : 1
+      };
+    } else if (matName.includes('外') || matName.includes('箱')) {
+      spec.outerBox = {
+        materialCode: matCode,
+        length: specDim.l,
+        width: specDim.w,
+        height: specDim.h,
+        capacity: capacity > 0 ? capacity : 2
+      };
+    }
+  });
+
+  // 3. 产品资料和图片 (Sheet1)
+  const prodSheet = workbook.worksheets.find(ws => ws.name.includes('Sheet1'))!;
+  const productMap = new Map<string, { oem: string, app: string, year: string, drive: string, imageData: { buffer: ArrayBuffer, extension: string } | null }>();
+  
+  let pHeaderRow = 1;
+  let pCodeCol = -1, pOemCol = -1, pAppCol = -1, pYearCol = -1, pDriveCol = -1;
+  for (let i = 1; i <= 20; i++) {
+    const rowValues = prodSheet.getRow(i).values as any[];
+    pCodeCol = findColIndex(rowValues, ['XX CODE']);
+    pOemCol = findColIndex(rowValues, ['OEM']);
+    if (pCodeCol !== -1 && pOemCol !== -1) {
+      pHeaderRow = i;
+      pAppCol = findColIndex(rowValues, ['Application']);
+      pYearCol = findColIndex(rowValues, ['Year']);
+      pDriveCol = findColIndex(rowValues, ['Drive']);
+      break;
+    }
+  }
+
+  const imageMap: Record<number, { buffer: ArrayBuffer; extension: string }> = {};
+  prodSheet.getImages().forEach((image) => {
+    const img = workbook.model.media.find((m: any, idx: number) => idx === (image as any).imageId || m.index === (image as any).imageId);
+    if (img && image.range.tl.nativeRow + 1) {
+      imageMap[image.range.tl.nativeRow + 1] = { buffer: img.buffer, extension: img.extension };
+    }
+  });
+
+  prodSheet.eachRow((row, rowNumber) => {
+    if (rowNumber <= pHeaderRow) return;
+    const xxCode = String(getCellValue(row.getCell(pCodeCol))).trim();
+    if (!xxCode) return;
+    const xxCodeNorm = normalize(xxCode);
+    
+    if (!productMap.has(xxCodeNorm)) {
+      productMap.set(xxCodeNorm, {
+        oem: String(getCellValue(row.getCell(pOemCol)) || ""),
+        app: pAppCol !== -1 ? String(getCellValue(row.getCell(pAppCol)) || "") : "",
+        year: pYearCol !== -1 ? String(getCellValue(row.getCell(pYearCol)) || "") : "",
+        drive: pDriveCol !== -1 ? String(getCellValue(row.getCell(pDriveCol)) || "") : "",
+        imageData: imageMap[rowNumber] || null
+      });
+    }
+  });
+
+  return { specs: Array.from(specsMap.values()), weights: weightsMap, products: productMap };
 };
 
 export const processPackingQueries = async (
   file: File, 
-  refData: { specs: PackingSpec[], weights: Map<string, number> },
+  refData: { specs: PackingSpec[], weights: Map<string, number>, products: Map<string, any> },
   onProgress?: (msg: string) => void
 ): Promise<PackingInputRow[]> => {
   
@@ -157,92 +200,47 @@ export const processPackingQueries = async (
   
   // Find header row and columns
   let headerRowIndex = 1;
-  let oemColIdx = -1;
-  let oeInputColIdx = -1;
   let xxColIdx = -1;
-  let priceColIdx = -1;
-  let prodColIdx = -1;
 
   for (let i = 1; i <= 20; i++) {
     const rowValues = worksheet.getRow(i).values as any[];
-    oemColIdx = findColIndex(rowValues, ['OEM', '型号']);
-    oeInputColIdx = findColIndex(rowValues, ['OE', '查询', '输入 OE']);
     xxColIdx = findColIndex(rowValues, ['XX CODE', 'XX编码', 'XX 编码']);
-    priceColIdx = findColIndex(rowValues, ['广州价', '价格', '单价', '单价']);
-    prodColIdx = findColIndex(rowValues, ['产品名', '名称', '品名']);
     
-    // We need either XX CODE or Input OE
-    if (xxColIdx !== -1 || oeInputColIdx !== -1) { 
+    if (xxColIdx !== -1) { 
         headerRowIndex = i; 
         break; 
     }
   }
 
-  const imageMap: Record<number, { buffer: ArrayBuffer; extension: string }> = {};
-  worksheet.getImages().forEach((image) => {
-    const img = workbook.model.media.find((m: any, idx: number) => idx === (image as any).imageId || m.index === (image as any).imageId);
-    if (img && image.range.tl.nativeRow + 1) {
-      imageMap[image.range.tl.nativeRow + 1] = { buffer: img.buffer, extension: img.extension };
-    }
-  });
-
   const results: PackingInputRow[] = [];
 
   worksheet.eachRow((row, rowNumber) => {
     if (rowNumber <= headerRowIndex) return;
+    if (xxColIdx === -1) return;
 
-    let xxCodeRaw = xxColIdx !== -1 ? String(getCellValue(row.getCell(xxColIdx)) || "").trim() : "";
-    const oeInputRaw = oeInputColIdx !== -1 ? String(getCellValue(row.getCell(oeInputColIdx)) || "").trim() : "";
-    const oemRaw = oemColIdx !== -1 ? String(getCellValue(row.getCell(oemColIdx)) || "") : "";
-    const priceRaw = priceColIdx !== -1 ? getCellValue(row.getCell(priceColIdx)) : null;
-    const prodRaw = prodColIdx !== -1 ? String(getCellValue(row.getCell(prodColIdx)) || "") : "";
+    const xxCodeRaw = String(getCellValue(row.getCell(xxColIdx)) || "").trim();
+    if (!xxCodeRaw) return;
 
-    // fallback extraction of XX CODE from input OE if missing
-    if (!xxCodeRaw && oeInputRaw) {
-        const tokens = oeInputRaw.split(/[\s\n,;:/|，；、]+/);
-        for (const t of tokens) {
-            const cleanT = t.trim();
-            if (cleanT.toUpperCase().startsWith('X')) {
-                xxCodeRaw = cleanT;
-                break;
-            }
-        }
-    }
-
-    if (!xxCodeRaw && !oeInputRaw && !oemRaw) return;
-
-    const baseCodeStr = String(xxCodeRaw).trim();
-    // find all specs where fullCode includes -XXCODE- or starts with XXCODE-
-    // Example: base is X062. fullCode is ZX-X062-020A -> matches
+    const baseCodeStr = xxCodeRaw;
     let matchedSpecs: PackingSpec[] = [];
     let normBase = normalize(baseCodeStr);
     
+    const prodData = refData.products.get(normBase);
+
     if (normBase) {
         matchedSpecs = refData.specs.filter(s => {
             const nFull = normalize(s.fullCode);
-            // exact match or bounded segment match
             if (nFull === normBase) return true;
-            // Bounded match by replacing non-alnum with hyphens in fullCode and checking parts
             const segments = String(s.fullCode).toUpperCase().replace(/[^A-Z0-9]/g, '-').split('-');
             if (segments.includes(baseCodeStr.toUpperCase())) return true;
             return false;
         });
     }
 
-    let status: PackingInputRow['status'] = 'no_match';
-    let statusMsg = '';
-    
-    if (matchedSpecs.length > 0) {
-        status = 'matched';
-    } else {
-        statusMsg = '未找到规格';
-    }
-    
     let weight = null;
     if (normBase && refData.weights.has(normBase)) {
         weight = refData.weights.get(normBase) || null;
     } else if (matchedSpecs.length > 0) {
-        // try to match weight by full code if base code failed
         for(const sp of matchedSpecs) {
              const nFull = normalize(sp.fullCode);
              if (refData.weights.has(nFull)) {
@@ -252,21 +250,34 @@ export const processPackingQueries = async (
         }
     }
 
-    if (status === 'matched' && weight === null) {
-        status = 'error';
-        statusMsg = '缺重量';
+    let statusMsgParts = [];
+    if (!prodData) statusMsgParts.push("缺产品资料");
+    else if (!prodData.imageData) statusMsgParts.push("缺图片");
+    
+    if (matchedSpecs.length === 0) {
+        statusMsgParts.push("缺包装规格");
+    } else if (matchedSpecs.length === 1) {
+        if (!matchedSpecs[0].innerBox) statusMsgParts.push("缺内箱");
+        if (!matchedSpecs[0].outerBox) statusMsgParts.push("缺外箱");
+    }
+
+    if (weight === null) statusMsgParts.push("缺重量");
+
+    let status: PackingInputRow['status'] = statusMsgParts.some(m => !['缺图片'].includes(m)) ? 'error' : 'no_match';
+    if (statusMsgParts.length === 0 || (statusMsgParts.length === 1 && statusMsgParts[0] === "缺图片")) {
+        status = 'no_match'; // still no match until qty entered
     }
 
     results.push({
         originalIndex: rowNumber,
-        originalXXCode: baseCodeStr || oeInputRaw,
-        originalProductName: prodRaw,
-        originalOEM: oemRaw,
-        originalPrice: priceRaw,
-        imageData: imageMap[rowNumber] || null,
+        originalXXCode: baseCodeStr,
+        originalProductName: 'steering rack',
+        originalOEM: prodData?.oem || "",
+        originalPrice: "", 
+        imageData: prodData?.imageData || null,
         
         status,
-        statusMsg,
+        statusMsg: statusMsgParts.join(', '),
         
         availableSpecs: matchedSpecs,
         selectedSpecFullCode: matchedSpecs.length === 1 ? matchedSpecs[0].fullCode : undefined,
@@ -479,7 +490,7 @@ export const exportPackingList = async (data: PackingInputRow[], fileName: strin
                 itemsTotal: { formula: `D${excelRowIndex}*E${excelRowIndex}`, result: calc.itemsTotal },
                 itemWeight: row.weightPerItem,
                 netWeightPerBox: { formula: `G${excelRowIndex}*E${excelRowIndex}`, result: calc.netWeightPerBox },
-                itemWeightG: '',
+                itemWeightG: { formula: `G${excelRowIndex}+1.5`, result: row.weightPerItem !== null ? row.weightPerItem + 1.5 : '' },
                 grossWeightPerBox: { formula: `H${excelRowIndex}+3`, result: calc.grossWeightPerBox },
                 totalNetWeight: { formula: `H${excelRowIndex}*D${excelRowIndex}`, result: calc.totalNetWeight },
                 totalGrossWeight: { formula: `J${excelRowIndex}*D${excelRowIndex}`, result: calc.totalGrossWeight },
@@ -502,11 +513,13 @@ export const exportPackingList = async (data: PackingInputRow[], fileName: strin
                 cell.font = { name: '黑体' };
             });
 
-            excelRow.getCell('netWeightPerBox').numFmt = '0.000';
-            excelRow.getCell('grossWeightPerBox').numFmt = '0.000';
-            excelRow.getCell('totalNetWeight').numFmt = '0.000';
-            excelRow.getCell('totalGrossWeight').numFmt = '0.000';
-            excelRow.getCell('cbm').numFmt = '0.000000';
+            excelRow.getCell('itemWeight').numFmt = '0.00';
+            excelRow.getCell('netWeightPerBox').numFmt = '0.00';
+            excelRow.getCell('itemWeightG').numFmt = '0.00';
+            excelRow.getCell('grossWeightPerBox').numFmt = '0.00';
+            excelRow.getCell('totalNetWeight').numFmt = '0.00';
+            excelRow.getCell('totalGrossWeight').numFmt = '0.00';
+            excelRow.getCell('cbm').numFmt = '0.00';
             
             if (row.imageData) {
                 try {
@@ -551,9 +564,9 @@ export const exportPackingList = async (data: PackingInputRow[], fileName: strin
         cell.border = { top: {style:'thin'}, left: {style:'thin'}, bottom: {style:'thin'}, right: {style:'thin'} };
     });
 
-    totalRow.getCell('totalNetWeight').numFmt = '0.000';
-    totalRow.getCell('totalGrossWeight').numFmt = '0.000';
-    totalRow.getCell('cbm').numFmt = '0.000000';
+    totalRow.getCell('totalNetWeight').numFmt = '0.00';
+    totalRow.getCell('totalGrossWeight').numFmt = '0.00';
+    totalRow.getCell('cbm').numFmt = '0.00';
     
     worksheet.views = [{ state: 'frozen', ySplit: 1 }];
 

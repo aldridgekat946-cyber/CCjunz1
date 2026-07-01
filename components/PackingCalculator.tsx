@@ -12,7 +12,7 @@ export const PackingCalculator: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingMsg, setProcessingMsg] = useState("");
   
-  const [refData, setRefData] = useState<{ specs: PackingSpec[], weights: Map<string, number> } | null>(null);
+  const [refData, setRefData] = useState<{ specs: PackingSpec[], weights: Map<string, number>, products: Map<string, any> } | null>(null);
   const [inputData, setInputData] = useState<PackingInputRow[]>([]);
   
   const [error, setError] = useState<string | null>(null);
@@ -65,8 +65,8 @@ export const PackingCalculator: React.FC = () => {
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Step 1</span>
             </div>
             <FileUploader 
-              label="上传参考库" 
-              subLabel="包含内外纸箱、重量两个Sheet"
+              label="上传统一产品库" 
+              subLabel="包含产品资料、图片、编号、包装材料和重量"
               file={refFile} 
               onFileSelect={(f) => { setRefFile(f); setRefData(null); }} 
               onClear={handleClearRef} 
@@ -79,8 +79,8 @@ export const PackingCalculator: React.FC = () => {
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Step 2</span>
             </div>
             <FileUploader 
-              label="上传待查清单" 
-              subLabel="包含 XX CODE 及数量需要的明细"
+              label="上传待查 XX CODE" 
+              subLabel="清单只需包含一列 XX CODE"
               file={oeFile} 
               onFileSelect={setOeFile} 
               onClear={() => setOeFile(null)} 

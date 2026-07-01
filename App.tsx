@@ -126,7 +126,7 @@ const App: React.FC = () => {
               onClick={() => setActiveTab('packing')}
               className={`px-8 py-3 rounded-xl font-bold text-sm transition-all duration-300 ${activeTab === 'packing' ? 'bg-white text-indigo-700 shadow-md shadow-slate-200/50 scale-100' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200 scale-95'}`}
             >
-              体积 / 面积 / 重量
+              体积 / 重量
             </button>
           </div>
         </div>

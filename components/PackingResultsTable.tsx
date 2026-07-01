@@ -23,31 +23,63 @@ const ImagePreview: React.FC<{ data?: { buffer: ArrayBuffer; extension: string }
   return <img src={url} alt="Preview" className="w-16 h-10 object-contain rounded border border-slate-200" />;
 };
 
+const validateRow = (row: PackingInputRow) => {
+    let statusMsgParts = [];
+    if (!row.originalOEM && !row.imageData && row.statusMsg?.includes('缺产品资料')) {
+        statusMsgParts.push('缺产品资料');
+    } else if (!row.imageData) {
+        statusMsgParts.push('缺图片');
+    }
+
+    if (row.availableSpecs.length === 0) {
+        statusMsgParts.push('缺包装规格');
+    } else if (!row.selectedSpecFullCode) {
+        statusMsgParts.push('规格未选择');
+    } else {
+        const spec = row.availableSpecs.find(s => s.fullCode === row.selectedSpecFullCode);
+        if (spec) {
+            if (!spec.innerBox) statusMsgParts.push('缺内箱');
+            if (!spec.outerBox) statusMsgParts.push('缺外箱');
+        }
+    }
+
+    if (row.weightPerItem === null) {
+        statusMsgParts.push('缺重量');
+    }
+
+    if (row.quantity !== '') {
+        const val = parseInt(String(row.quantity), 10);
+        if (isNaN(val) || val <= 0 || !/^\d+$/.test(String(row.quantity))) {
+            statusMsgParts.push('数量无效');
+        }
+    }
+
+    const hasBlockingError = statusMsgParts.some(m => !['缺图片'].includes(m));
+    if (hasBlockingError) {
+        row.status = 'error';
+    } else if (row.quantity === '') {
+        row.status = 'no_match';
+    } else {
+        row.status = 'matched';
+    }
+    
+    row.statusMsg = statusMsgParts.join(', ');
+};
+
 export const PackingResultsTable: React.FC<PackingResultsTableProps> = ({ data, onDataChange, onExport }) => {
   const [filter, setFilter] = useState<'all' | 'error' | 'matched'>('all');
 
   const handleSpecChange = (index: number, fullCode: string) => {
     const newData = [...data];
     newData[index].selectedSpecFullCode = fullCode;
+    validateRow(newData[index]);
     onDataChange(newData);
   };
 
   const handleQuantityChange = (index: number, qty: string) => {
     const newData = [...data];
     newData[index].quantity = qty;
-    if (qty.trim() === '') {
-        newData[index].status = newData[index].availableSpecs.length > 0 ? 'matched' : 'no_match';
-        newData[index].statusMsg = '';
-    } else {
-        const val = parseInt(qty, 10);
-        if (isNaN(val) || val <= 0 || !/^\d+$/.test(qty)) {
-            newData[index].status = 'invalid_qty';
-            newData[index].statusMsg = '数量无效';
-        } else if (newData[index].availableSpecs.length > 0) {
-            newData[index].status = 'matched';
-            newData[index].statusMsg = '';
-        }
-    }
+    validateRow(newData[index]);
     onDataChange(newData);
   };
 
@@ -58,16 +90,26 @@ export const PackingResultsTable: React.FC<PackingResultsTableProps> = ({ data, 
       return true;
   });
 
-  // Calculate totals
+  // Calculate totals and stats
   let totalItems = 0;
   let totalBoxes = 0;
   let totalNet = 0;
   let totalGross = 0;
   let totalCbm = 0;
-  let totalArea = 0;
   let validRowsCount = 0;
+  
+  let statInput = data.length;
+  let statProd = 0;
+  let statImg = 0;
+  let statPack = 0;
+  let statWeight = 0;
 
   data.forEach(r => {
+      if (r.originalOEM || r.imageData || !r.statusMsg?.includes('缺产品资料')) statProd++;
+      if (r.imageData) statImg++;
+      if (r.availableSpecs.length > 0) statPack++;
+      if (r.weightPerItem !== null) statWeight++;
+
       if (r.status === 'matched' && r.selectedSpecFullCode && r.quantity) {
           const calcs = calculatePacking(r);
           if (calcs.length > 0) {
@@ -78,7 +120,6 @@ export const PackingResultsTable: React.FC<PackingResultsTableProps> = ({ data, 
                   totalNet += c.totalNetWeight;
                   totalGross += c.totalGrossWeight;
                   totalCbm += c.totalCBM;
-                  totalArea += c.totalArea;
               });
           }
       }
@@ -87,14 +128,23 @@ export const PackingResultsTable: React.FC<PackingResultsTableProps> = ({ data, 
   return (
     <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
       {/* Top summary card */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-4 p-4 bg-slate-50 border-b border-slate-200">
-          <div className="flex flex-col"><span className="text-xs text-slate-500">有效产品数</span><span className="font-bold">{validRowsCount}</span></div>
-          <div className="flex flex-col"><span className="text-xs text-slate-500">总支数</span><span className="font-bold">{totalItems}</span></div>
-          <div className="flex flex-col"><span className="text-xs text-slate-500">总箱数</span><span className="font-bold text-indigo-600">{totalBoxes}</span></div>
-          <div className="flex flex-col"><span className="text-xs text-slate-500">总净重(kg)</span><span className="font-bold">{totalNet.toFixed(3)}</span></div>
-          <div className="flex flex-col"><span className="text-xs text-slate-500">总毛重(kg)</span><span className="font-bold text-emerald-600">{totalGross.toFixed(3)}</span></div>
-          <div className="flex flex-col"><span className="text-xs text-slate-500">总体积(CBM)</span><span className="font-bold">{totalCbm.toFixed(6)}</span></div>
-          <div className="flex flex-col"><span className="text-xs text-slate-500">总表面积(m²)</span><span className="font-bold">{totalArea.toFixed(6)}</span></div>
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4 p-4 bg-slate-50 border-b border-slate-200">
+          <div className="flex flex-col"><span className="text-xs text-slate-500">有效参与计算行</span><span className="font-bold text-lg">{validRowsCount}</span></div>
+          <div className="flex flex-col"><span className="text-xs text-slate-500">总支数</span><span className="font-bold text-lg">{totalItems}</span></div>
+          <div className="flex flex-col"><span className="text-xs text-slate-500">总箱数</span><span className="font-bold text-lg text-indigo-600">{totalBoxes}</span></div>
+          <div className="flex flex-col"><span className="text-xs text-slate-500">总净重(kg)</span><span className="font-bold text-lg">{totalNet.toFixed(2)}</span></div>
+          <div className="flex flex-col"><span className="text-xs text-slate-500">总毛重(kg)</span><span className="font-bold text-lg text-emerald-600">{totalGross.toFixed(2)}</span></div>
+          <div className="flex flex-col"><span className="text-xs text-slate-500">总体积(CBM)</span><span className="font-bold text-lg">{totalCbm.toFixed(2)}</span></div>
+      </div>
+      
+      {/* Missing stats row */}
+      <div className="flex flex-wrap gap-4 px-4 py-3 bg-slate-100 border-b border-slate-200 text-sm font-medium">
+          <div className="text-slate-600">匹配统计：</div>
+          <div className="text-slate-700">输入行数: {statInput}</div>
+          <div className={statProd < statInput ? "text-amber-600" : "text-emerald-600"}>产品匹配: {statProd}</div>
+          <div className={statImg < statInput ? "text-amber-600" : "text-emerald-600"}>图片匹配: {statImg}</div>
+          <div className={statPack < statInput ? "text-red-600" : "text-emerald-600"}>包装匹配: {statPack}</div>
+          <div className={statWeight < statInput ? "text-red-600" : "text-emerald-600"}>重量匹配: {statWeight}</div>
       </div>
       
       {/* Controls */}
