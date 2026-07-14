@@ -54,7 +54,8 @@ const validateRow = (row: PackingInputRow) => {
         }
     }
 
-    const hasBlockingError = statusMsgParts.some(m => !['缺图片'].includes(m));
+    const blockingErrors = ['缺包装规格', '规格未选择', '缺外箱', '缺重量', '数量无效'];
+    const hasBlockingError = statusMsgParts.some(m => blockingErrors.includes(m));
     if (hasBlockingError) {
         row.status = 'error';
     } else if (row.quantity === '') {

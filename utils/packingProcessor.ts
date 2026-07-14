@@ -199,7 +199,7 @@ export const processPackingQueries = async (
   const worksheet = workbook.worksheets[0];
   
   // Find header row and columns
-  let headerRowIndex = 1;
+  let headerRowIndex = 0;
   let xxColIdx = -1;
 
   for (let i = 1; i <= 20; i++) {
@@ -212,11 +212,16 @@ export const processPackingQueries = async (
     }
   }
 
+  // Fallback if no header found (user provided single column file)
+  if (xxColIdx === -1) {
+      xxColIdx = 1;
+      headerRowIndex = 0;
+  }
+
   const results: PackingInputRow[] = [];
 
   worksheet.eachRow((row, rowNumber) => {
     if (rowNumber <= headerRowIndex) return;
-    if (xxColIdx === -1) return;
 
     const xxCodeRaw = String(getCellValue(row.getCell(xxColIdx)) || "").trim();
     if (!xxCodeRaw) return;
@@ -263,10 +268,8 @@ export const processPackingQueries = async (
 
     if (weight === null) statusMsgParts.push("缺重量");
 
-    let status: PackingInputRow['status'] = statusMsgParts.some(m => !['缺图片'].includes(m)) ? 'error' : 'no_match';
-    if (statusMsgParts.length === 0 || (statusMsgParts.length === 1 && statusMsgParts[0] === "缺图片")) {
-        status = 'no_match'; // still no match until qty entered
-    }
+    const blockingErrors = ['缺包装规格', '规格未选择', '缺外箱', '缺重量', '数量无效'];
+    let status: PackingInputRow['status'] = statusMsgParts.some(m => blockingErrors.includes(m)) ? 'error' : 'no_match';
 
     results.push({
         originalIndex: rowNumber,
