@@ -34,7 +34,7 @@ const validateRow = (row: PackingInputRow) => {
     if (row.availableSpecs.length === 0) {
         statusMsgParts.push('缺包装规格');
     } else if (!row.selectedSpecFullCode) {
-        statusMsgParts.push('规格未选择');
+        statusMsgParts.push('请选择规格');
     } else {
         const spec = row.availableSpecs.find(s => s.fullCode === row.selectedSpecFullCode);
         if (spec) {
@@ -54,7 +54,7 @@ const validateRow = (row: PackingInputRow) => {
         }
     }
 
-    const blockingErrors = ['缺包装规格', '规格未选择', '缺外箱', '缺重量', '数量无效'];
+    const blockingErrors = ['缺包装规格', '规格未选择', '请选择规格', '缺外箱', '缺重量', '数量无效'];
     const hasBlockingError = statusMsgParts.some(m => blockingErrors.includes(m));
     if (hasBlockingError) {
         row.status = 'error';

@@ -201,10 +201,12 @@ export const processPackingQueries = async (
   // Find header row and columns
   let headerRowIndex = 0;
   let xxColIdx = -1;
+  let qtyColIdx = -1;
 
   for (let i = 1; i <= 20; i++) {
     const rowValues = worksheet.getRow(i).values as any[];
-    xxColIdx = findColIndex(rowValues, ['XX CODE', 'XX编码', 'XX 编码']);
+    if (xxColIdx === -1) xxColIdx = findColIndex(rowValues, ['XX CODE', 'XX编码', 'XX 编码']);
+    if (qtyColIdx === -1) qtyColIdx = findColIndex(rowValues, ['数量', 'QTY', 'Quantity', 'QTY.']);
     
     if (xxColIdx !== -1) { 
         headerRowIndex = i; 
@@ -225,6 +227,11 @@ export const processPackingQueries = async (
 
     const xxCodeRaw = String(getCellValue(row.getCell(xxColIdx)) || "").trim();
     if (!xxCodeRaw) return;
+
+    let initialQuantity = '';
+    if (qtyColIdx !== -1) {
+        initialQuantity = String(getCellValue(row.getCell(qtyColIdx)) || "").trim();
+    }
 
     const baseCodeStr = xxCodeRaw;
     let matchedSpecs: PackingSpec[] = [];
@@ -264,12 +271,14 @@ export const processPackingQueries = async (
     } else if (matchedSpecs.length === 1) {
         if (!matchedSpecs[0].innerBox) statusMsgParts.push("缺内箱");
         if (!matchedSpecs[0].outerBox) statusMsgParts.push("缺外箱");
+    } else if (matchedSpecs.length > 1) {
+        statusMsgParts.push("请选择规格");
     }
 
     if (weight === null) statusMsgParts.push("缺重量");
 
-    const blockingErrors = ['缺包装规格', '规格未选择', '缺外箱', '缺重量', '数量无效'];
-    let status: PackingInputRow['status'] = statusMsgParts.some(m => blockingErrors.includes(m)) ? 'error' : 'no_match';
+    const blockingErrors = ['缺包装规格', '规格未选择', '请选择规格', '缺外箱', '缺重量', '数量无效'];
+    let status: PackingInputRow['status'] = statusMsgParts.some(m => blockingErrors.includes(m)) ? 'error' : (initialQuantity ? 'matched' : 'no_match');
 
     results.push({
         originalIndex: rowNumber,
@@ -284,7 +293,7 @@ export const processPackingQueries = async (
         
         availableSpecs: matchedSpecs,
         selectedSpecFullCode: matchedSpecs.length === 1 ? matchedSpecs[0].fullCode : undefined,
-        quantity: '',
+        quantity: initialQuantity,
         weightPerItem: weight
     });
   });
@@ -571,7 +580,74 @@ export const exportPackingList = async (data: PackingInputRow[], fileName: strin
     totalRow.getCell('totalGrossWeight').numFmt = '0.00';
     totalRow.getCell('cbm').numFmt = '0.00';
     
-    worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+        worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+
+    // --- Add 信息页 (Information Sheet) ---
+    const infoSheet = workbook.addWorksheet('信息页');
+    infoSheet.columns = [
+        { header: '规格', key: 'specCode', width: 20 },
+        { header: '图片', key: 'picture', width: 25 },
+        { header: 'OEM', key: 'oem', width: 30 },
+        { header: '外箱尺寸', key: 'outerBox', width: 35 },
+        { header: '内箱尺寸', key: 'innerBox', width: 35 },
+        { header: '单支净重', key: 'unitNetWeight', width: 20 },
+    ];
+    infoSheet.getRow(1).height = 30;
+    infoSheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    infoSheet.getRow(1).font = { name: '黑体', bold: true };
+    infoSheet.getRow(1).eachCell((cell) => {
+        cell.border = { top: {style:'thin'}, left: {style:'thin'}, bottom: {style:'thin'}, right: {style:'thin'} };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0F0F0' } };
+    });
+
+    let infoRowIndex = 2;
+    for (const row of data) {
+        if (!row.selectedSpecFullCode) continue;
+        const spec = row.availableSpecs.find(s => s.fullCode === row.selectedSpecFullCode);
+        if (!spec) continue;
+
+        const ob = spec.outerBox;
+        const outerBoxStr = ob ? `${ob.materialCode}\n${ob.length}*${ob.width}*${ob.height}` : '-';
+        
+        const ib = spec.innerBox;
+        const innerBoxStr = ib ? `${ib.materialCode}\n${ib.length}*${ib.width}*${ib.height}` : '-';
+
+        const weightStr = row.weightPerItem !== null ? `${row.weightPerItem} kg` : '-';
+
+        const excelRow = infoSheet.addRow({
+            specCode: row.selectedSpecFullCode,
+            picture: '', // spacing for image
+            oem: row.originalOEM || '-',
+            outerBox: outerBoxStr,
+            innerBox: innerBoxStr,
+            unitNetWeight: weightStr
+        });
+        
+        excelRow.height = 100;
+        excelRow.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+        excelRow.eachCell((cell) => {
+            cell.border = { top: {style:'thin'}, left: {style:'thin'}, bottom: {style:'thin'}, right: {style:'thin'} };
+        });
+
+        // Add image if available
+        if (row.imageData) {
+            try {
+                const imageId = workbook.addImage({
+                    buffer: row.imageData.buffer,
+                    extension: row.imageData.extension as any
+                });
+                infoSheet.addImage(imageId, {
+                    tl: { col: 1, row: infoRowIndex - 1, nativeColOff: 200000, nativeRowOff: 200000 },
+                    ext: { width: 140, height: 70 },
+                    editAs: 'oneCell'
+                });
+            } catch (e) {
+                console.error("Error adding image to info sheet", e);
+            }
+        }
+
+        infoRowIndex++;
+    }
 
     const buffer = await workbook.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
